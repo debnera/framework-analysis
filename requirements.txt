@@ -1,0 +1,7 @@
+ujson
+pandas
+numpy
+seaborn
+jupyter
+pyarrow
+
