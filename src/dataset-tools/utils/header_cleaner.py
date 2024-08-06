@@ -1,5 +1,7 @@
 import pandas as pd
 import ujson as json
+from typing import List
+
 
 def get_descriptive_keys(header_group):
     headers = [json.loads(x) for x in header_group]
@@ -78,7 +80,7 @@ def minimize_keys(df, cols, descriptive_keys):
             return new_headers
 
 
-def prettify_header(header: dict, keys: list[str]):
+def prettify_header(header: dict, keys: List[str]):
     if type(header) != dict:
         header = json.loads(header)
     keys = set(keys) - {'__name__'}
