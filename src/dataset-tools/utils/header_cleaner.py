@@ -118,7 +118,11 @@ def clean_up_headers(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     grouped_by_name = {}
     for col in list(df.columns):
-        header_dict = json.loads(col)
+        try:
+            header_dict = json.loads(col)
+        except:
+            print(f"Unable to read {col} as json")
+            continue
         name = header_dict["__name__"]
         if name not in grouped_by_name:
             grouped_by_name[name] = []
