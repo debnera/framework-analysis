@@ -4,3 +4,5 @@ data
 *.pyc
 __pycache__
 auto-sklearn-models
+*.png
+
