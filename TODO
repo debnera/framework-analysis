@@ -1,0 +1,13 @@
+What does the Framework paper need?
+- Watts per QoS metrics
+--> this needs both QoS metrics and a couple of different setups to compare
+
+Plotting QoS metrics
+- Queue time histograms
+- Avg queue time
+- images per second
+--> need to be compared against the day-night-cycle
+
+Kafka metrics
+- Sent images per second
+--> where to get? some kafka topic count?
