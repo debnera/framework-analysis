@@ -4,4 +4,4 @@ numpy
 seaborn
 jupyter
 pyarrow
-
+plotly
