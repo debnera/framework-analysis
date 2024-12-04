@@ -25,6 +25,34 @@ def rename_workers(column_json: str):
         column_json = column_json.replace("worker" + str(i), "worker")
     return column_json
 
+def filter_experiment_specific(column_json: str):
+    # Filter out columns that can be used to infer the experiment or time (e.g., remaining disk space)
+    # Otherwise, it can be easy to make predictions from wall-clock instead of the actual hw metrics
+    #
+    json_obj = try_load_json(column_json)
+    # Accept all columns that cannot be parsed as json
+    if json_obj is None:
+        return True
+    # Accept all columns, except go specific columns
+    column_name: str = json_obj["__name__"]
+    if column_name.startswith("node_memory"):
+        # Available / used memory depends on the state of the cluster -> can be used to identify the experiment
+        return False
+    if column_name.startswith("node_filesystem"):
+        # Available / used disk space depends on the state of the cluster -> can be used to identify the experiment
+        return False
+    if column_name.startswith("scrape_"):
+        # Related to how prometheus scrapes data -> useless but can be used to identify the experiment
+        return False
+    if column_name.startswith("node_sockstat"):
+        # Connectivity statistics -> probably useless but can be used to identify the experiment
+        return False
+    if column_name.startswith("node_nf_conntrack"):
+        # Connectivity statistics -> probably useless but can be used to identify the experiment
+        return False
+    # Accept all other columns
+    return True
+
 def filter_namespaces(column_json: str):
     # Filter out key-pairs such as: "container_namespace":"kube-system"
     json_obj = try_load_json(column_json)
