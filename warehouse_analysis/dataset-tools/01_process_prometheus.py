@@ -128,7 +128,7 @@ def process_zip(input_path, zip_relative_path, output_path2):
     dfs = []
     print(f"Processing {zip_relative_path}")
     zip_name = zip_relative_path.replace(".zip", "")  # Remove file-extension for now
-    full_output_path = f"{output_path2}/{zip_name}"
+    full_output_path = f"{output_path2}/{zip_name}".replace(" ", "")  # Strip whitespace
     intermediate_folder_path = f"{full_output_path}/intermediate"
     full_intermediate_df_path = f"{intermediate_folder_path}/full.feather"  # Combined df from all intermediate files
     processed_folder_path = f"{full_output_path}/"
