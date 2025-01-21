@@ -22,8 +22,8 @@ Results are minimized by removing all columns with static values.
 # input_path = "/home/anton/Downloads/ov-ajo"
 # input_path = "../../data/raw_datasets/ov_vs_pytorch"
 # output_path = "../../data/processed/ov_vs_pytorch/prom"
-input_path = "../../data/run_3/snapshots"
-output_path = "../../data/minimized/"
+input_path = "../../data/run_5/snapshots"
+output_path = "../../data/minimized_run_5/"
 
 zip_files_list = utils.list_zip_files(input_path)
 
