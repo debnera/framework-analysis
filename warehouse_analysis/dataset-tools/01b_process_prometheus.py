@@ -1,7 +1,9 @@
 #%%
 import os
 import os.path
+import sys
 
+import psutil
 import ujson as json
 
 from utils import utils
@@ -89,19 +91,41 @@ def get_slices(zip_file, size_limit_mb):
 
     return slices
 
+def check_ram():
+    # Check OS memory usage
+    memory_info = psutil.virtual_memory()
+    if memory_info.percent > 80:
+        user_input = input(f"Memory usage is at {memory_info.percent}%. Do you want to continue? (yes/no): ")
+        if user_input.lower() != "yes":
+            print("Aborting due to high memory usage.")
+            sys.exit(1)
+
+
 def parse_slice(zip_file, slice):
-    values_container = {}
     index = 0
+    values_df = None
     with zipfile.ZipFile(zip_file, 'r') as zip_ref:
         for path in slice:
+            values_container = {}
+            check_ram()
             size_in_megabytes = zip_ref.getinfo(path).file_size / (1024 * 1024)
-            # print(f"\t{index}: {size_in_megabytes} MB, {path}")
+            print(f"\t{index}: {size_in_megabytes} MB, {path}")
             index += 1
             with zip_ref.open(path) as json_file:
                 parse_metric(json_file, path, values_container)
+            container_size = sum(sys.getsizeof(v) for v in values_container.values()) / (1024 * 1024)
+            print(f"Current size of values_container: {container_size:.2f} MB, {len(values_container)} entries")
+            if values_df is None:
+                values_df = pd.DataFrame(values_container)
+            else:
+                values_df = pd.merge(values_df, pd.DataFrame(values_container), how="outer")
+            print(f"Current size in memory: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB, rows: {len(values_df)}, columns: {len(values_df.columns)}")
 
-    values_df = pd.DataFrame(values_container).apply(pd.to_numeric,
-                                                     errors='ignore')  # Move to numeric if possible, cutting off 90% of size
+    # print("Creating df from values_container...")
+    # values_df = pd.DataFrame(values_container)
+    print(f"values_df size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB")
+    values_df = values_df.apply(pd.to_numeric, errors='ignore')  # Move to numeric if possible, cutting off 90% of size
+    print(f"values_df after cut size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB")
     return values_df
 
 
