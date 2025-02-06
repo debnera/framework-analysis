@@ -1,10 +1,9 @@
 #%%
-import os.path
-import time
-import zipfile
-import pandas as pd
-import ujson as json
 import os
+import os.path
+
+import ujson as json
+
 from utils import utils
 
 """
@@ -22,8 +21,11 @@ Results are minimized by removing all columns with static values.
 # input_path = "/home/anton/Downloads/ov-ajo"
 # input_path = "../../data/raw_datasets/ov_vs_pytorch"
 # output_path = "../../data/processed/ov_vs_pytorch/prom"
-input_path = "../../data_warehouse/warehouse_3/snapshots/"
-output_path = "../../data_warehouse/minimized_warehouse_3/"
+input_path = "../../data_warehouse/warehouse_7b/snapshots/"
+output_path = "../../data_warehouse/minimized_warehouse_7b/"
+
+run_in_parallel = False  # parallel execution might cause running out of memory
+max_parallel_workers = 10  #
 
 zip_files_list = utils.list_zip_files(input_path)
 
@@ -43,17 +45,19 @@ import utils.prometheus_processing as prom_util
 from concurrent.futures import ProcessPoolExecutor
 
 # Open the .7z file
-def to_feather_sync(df, path):
+def to_feather_sync(df: pd.DataFrame, path):
     # Save to feather as usual
     if len(df) == 0:
         print(f"Cannot save empty dataframe! {path}")
         return
     path = path.replace(":", "-")  # Saving with names like 10.192.33.1:3000 fail because of the port number
+    memory_size = df.memory_usage(deep=True).sum() / (1024 * 1024)  # Convert bytes to MB
     df.to_feather(path)
-    print(f"Saved {path}")
+    print(f"Saved {path} (df size in memory: {memory_size:.2f} MB, rows: {len(df)}, columns: {len(df.columns)})")
     # Force OS to write the file to disk (multithreaded writing seems to fully fill memory without this)
     with open (path, "rb+") as f:
         os.fsync(f.fileno())
+    # print(f"Verified that {path} is saved on disk.")
 
 def get_slices(zip_file, size_limit_mb):
     if zip_file.endswith(".zip"):
@@ -91,7 +95,7 @@ def parse_slice(zip_file, slice):
     with zipfile.ZipFile(zip_file, 'r') as zip_ref:
         for path in slice:
             size_in_megabytes = zip_ref.getinfo(path).file_size / (1024 * 1024)
-            print(f"\t{index}: {size_in_megabytes} MB, {path}")
+            # print(f"\t{index}: {size_in_megabytes} MB, {path}")
             index += 1
             with zip_ref.open(path) as json_file:
                 parse_metric(json_file, path, values_container)
@@ -124,7 +128,7 @@ def parse_metric(data, path, values_container):
         print(f"An unexpected error occurred while parsing JSON file '{path}': {e}")
 
 
-def process_zip(input_path, zip_relative_path, output_path2):
+def process_zip(input_path, zip_relative_path, output_path2, process_intermediate_only):
     dfs = []
     print(f"Processing {zip_relative_path}")
     zip_name = zip_relative_path.replace(".zip", "")  # Remove file-extension for now
@@ -140,33 +144,63 @@ def process_zip(input_path, zip_relative_path, output_path2):
             os.makedirs(intermediate_folder_path, exist_ok=True)
             output_path = intermediate_folder_path + f"/{i}.feather"
             if os.path.exists(output_path):
-                values = pd.read_feather(output_path)
-                print(f"Got intermediate file from {output_path}")
+                if process_intermediate_only:
+                    print(f"Skipping intermediate {output_path} because it already exists")
+                    continue
+                else:
+                    values = pd.read_feather(output_path)
+                    print(f"Got intermediate file from {output_path}")
             else:
+                # print(f"Parsing slice {i} of {len(slices)}")
                 values = parse_slice(
                     zip_file=f'{input_path}/{zip_relative_path}',
                     slice=slice,
                 )
                 # values = values.apply(pd.to_numeric, errors='coerce')
+                # print("got vals")
                 values.reset_index(drop=False, inplace=True, names=["timestamp"])  # Reset to default index (in case of old pandas/pyarrow version)
+                # print("reset index")
                 unique_counts = values.nunique()
                 static_columns = unique_counts[unique_counts <= 2].index
                 values.drop(static_columns, axis=1, inplace=True)
+                # print("drop static")
                 if len(values) == 0:
                     # Cannot save empty dataframes - nothing to do here
                     continue
                 try:
                     # values.to_feather(output_path)
                     to_feather_sync(values, output_path)
+                    # print("sync-write to file")
                 except Exception as e:
                     print(e)
                 # print(f"Saved intermediate {output_path}")
             values.index = values["timestamp"]
             values.drop(columns=["timestamp"], inplace=True)
-            dfs.append(values)
 
+            if len(dfs) == 0:
+                dfs.append(values)
+            else:
+                df = pd.merge(dfs[0], values, how="outer")
+                dfs[0] = df
+            """ Old style: (probably removes data)
+            if not process_intermediate_only:
+                dfs.append(values)
+                if len(dfs) > 2:
+                    # Try to minimize memory usage
+                    df = pd.concat(dfs, axis=1)
+                    print(df.columns[df.columns.duplicated()])
+                    print(f"Current size in memory: {df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB")
+                    df = df.loc[:,
+                         ~df.columns.duplicated()]  # TODO: Does removing duplicates remove information? Happens probably at zip-file slice boundaries
+                    print(f"Current size in memory: {df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB")
+                    dfs = [df]
+                # print("append to dfs")
+            """
+        if process_intermediate_only:
+            return
         try:
             df = pd.concat(dfs, axis=1)
+
         except Exception as e:
             # This can happen if the zip did not contain any prometheus data (e.g., it contains yolo-data only)
             print(e)
@@ -183,6 +217,7 @@ def process_zip(input_path, zip_relative_path, output_path2):
     else:
         print(f"Got cached full df from {full_intermediate_df_path}")
         df = pd.read_feather(full_intermediate_df_path)
+        return #TODO: Debug only
 
     # df.index = df["timestamp"]  # Re-add index (in case of old pandas/pyarrow version)
 
@@ -237,12 +272,12 @@ def main():
     zips = utils.list_zip_files(input_path)
     print(zips)
 
-    run_in_parallel = True  # Set this to False for sequential execution
 
+
+    """ First process all intermediate files one-by-one to save memory (otherwise multithreading might fill up memory) """
     if run_in_parallel:
-        max_workers = 10
-        with ProcessPoolExecutor(max_workers) as executor:
-            futures = [executor.submit(process_zip, input_path, zip_name_full, output_path) for zip_name_full in zips]
+        with ProcessPoolExecutor(max_parallel_workers) as executor:
+            futures = [executor.submit(process_zip, input_path, zip_name_full, output_path, True) for zip_name_full in zips]
             for future in futures:
                 try:
                     future.result()
@@ -251,9 +286,17 @@ def main():
     else:
         for zip_name_full in zips:
             try:
-                process_zip(input_path, zip_name_full, output_path)
+                process_zip(input_path, zip_name_full, output_path, process_intermediate_only=True)
             except Exception as e:
                 print(f"Exception raised in sequential processing: {e}")
+
+    """ Then read all intermediate files to memory and combine them into one big dataframe per zip file """
+    for zip_name_full in zips:
+        try:
+            process_zip(input_path, zip_name_full, output_path, process_intermediate_only=False)
+        except Exception as e:
+            print(f"Exception raised in sequential processing: {e}")
+
 #%%
 def print_statistics():
     """
@@ -263,7 +306,6 @@ def print_statistics():
     """
     import os
     import pandas as pd
-    import pyarrow.feather as feather
 
     def count_feather_files(fpath):
         feather_files = []
