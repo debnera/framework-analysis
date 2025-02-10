@@ -100,8 +100,37 @@ def check_ram():
             print("Aborting due to high memory usage.")
             sys.exit(1)
 
-
 def parse_slice(zip_file, slice):
+    values_container = {}
+    index = 0
+    with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+        total_size = sum(zip_ref.getinfo(path).file_size for path in slice) / (1024 * 1024)  # Convert to MB
+        parent_folder = os.path.dirname(slice[0])  # Get the parent directory of the first file
+        print(f"Processing {parent_folder} (size: {total_size:.2f} MB, files {len(slice)})")
+        for path in slice:
+            # size_in_megabytes = zip_ref.getinfo(path).file_size / (1024 * 1024)
+            # print(f"\t{index}: {size_in_megabytes} MB, {path}")
+            print(f" {index}", end="")
+            index += 1
+            with zip_ref.open(path) as json_file:
+                parse_metric(json_file, path, values_container)
+
+    dfs = []
+    for key, item in values_container.items():
+        print(f"{key}: {len(item)}")
+        df = pd.DataFrame({key: item})
+        df = df.apply(pd.to_numeric, errors='ignore')  # Move to numeric if possible, cutting off 90% of size
+        print(f"{key}: {df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB")
+        dfs.append(df)
+
+    values_df = pd.DataFrame(values_container).apply(pd.to_numeric,
+                                                     errors='ignore')  # Move to numeric if possible, cutting off 90% of size
+    print("")
+    print(f"values_df after cut size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB "
+          f"(rows: {len(values_df)}, columns: {len(values_df.columns)})")
+    return values_df
+
+def parse_slice2(zip_file, slice):
     index = 0
     values_df = None
     with zipfile.ZipFile(zip_file, 'r') as zip_ref:
@@ -145,7 +174,6 @@ def get_folders(zip_file, size_limit_mb):
 
     return list(folders.values())
 
-
 def parse_metric(data, path, values_container):
     json_data = json.load(data)
     # print(path)
@@ -168,6 +196,10 @@ def parse_metric(data, path, values_container):
     except Exception as e:
         print(f"An unexpected error occurred while parsing JSON file '{path}': {e}")
 
+def print_combined_size_dataframes(dfs: list[pd.DataFrame]):
+    total_size = sum(df.memory_usage(deep=True).sum() for df in dfs)  # Get size in bytes
+    total_size_mb = total_size / (1024 * 1024)  # Convert to MB
+    print(f"Combined size of DataFrames: {total_size_mb:.2f} MB")
 
 def process_zip(input_path, zip_relative_path, output_path2, process_intermediate_only):
     dfs = []
@@ -220,6 +252,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
                 values.index = values["timestamp"]
                 values.drop(columns=["timestamp"], inplace=True)
                 dfs.append(values)
+                print_combined_size_dataframes(dfs)
 
             # if not process_intermediate_only:
             #     if len(dfs) == 0:
