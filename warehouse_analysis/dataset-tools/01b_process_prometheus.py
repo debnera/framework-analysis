@@ -5,6 +5,7 @@ import sys
 
 import psutil
 import ujson as json
+from typing import List
 
 from utils import utils
 
@@ -23,11 +24,12 @@ Results are minimized by removing all columns with static values.
 # input_path = "/home/anton/Downloads/ov-ajo"
 # input_path = "../../data/raw_datasets/ov_vs_pytorch"
 # output_path = "../../data/processed/ov_vs_pytorch/prom"
-input_path = "../../data_warehouse/warehouse_7b/snapshots/"
-output_path = "../../data_warehouse/minimized_warehouse_7b/"
+input_path = "../../data_warehouse/warehouse_7c/snapshots/"
+output_path = "../../data_warehouse/minimized_warehouse_7c/"
+namespace_filter = "workload"  # Ignore all namespaces that do not have this string in it
 
-run_in_parallel = False  # parallel execution might cause running out of memory
-max_parallel_workers = 10  #
+run_in_parallel = True  # parallel execution might cause running out of memory
+max_parallel_workers = 3  #
 
 zip_files_list = utils.list_zip_files(input_path)
 
@@ -107,13 +109,19 @@ def parse_slice(zip_file, slice):
         total_size = sum(zip_ref.getinfo(path).file_size for path in slice) / (1024 * 1024)  # Convert to MB
         parent_folder = os.path.dirname(slice[0])  # Get the parent directory of the first file
         print(f"Processing {parent_folder} (size: {total_size:.2f} MB, files {len(slice)})")
+        filtered_out = 0
+        no_namespace = 0
         for path in slice:
             # size_in_megabytes = zip_ref.getinfo(path).file_size / (1024 * 1024)
             # print(f"\t{index}: {size_in_megabytes} MB, {path}")
             print(f" {index}", end="")
             index += 1
             with zip_ref.open(path) as json_file:
-                parse_metric(json_file, path, values_container)
+                a, b = parse_metric(json_file, path, values_container)
+                filtered_out += a
+                no_namespace += b
+        print(f"\nFiltered out: {filtered_out}, no namespace: {no_namespace}")
+
 
     dfs = []
     for key, item in values_container.items():
@@ -179,9 +187,19 @@ def parse_metric(data, path, values_container):
     # print(path)
 
     # LOOP THROUGH EACH SUB-METRIC
+    filtered_out = 0
+    no_namespace = 0
     try:
         for item in json_data['data']['result']:
             header = json.dumps(item['metric']) # Use a tuple of the metric dictionary's items
+            # Filter out if possible:
+            if "namespace" in item["metric"]:
+                if namespace_filter not in item["metric"]["namespace"]:
+                    filtered_out += 1
+                    continue
+            else:
+                no_namespace += 1
+
             values = dict(item['values'])
 
             # ADD HEADER KEY TO VALUES DICT
@@ -195,8 +213,9 @@ def parse_metric(data, path, values_container):
         print(f"ValueError occurred while parsing JSON file '{path}': {e}")
     except Exception as e:
         print(f"An unexpected error occurred while parsing JSON file '{path}': {e}")
+    return filtered_out, no_namespace
 
-def print_combined_size_dataframes(dfs: list[pd.DataFrame]):
+def print_combined_size_dataframes(dfs: List[pd.DataFrame]):
     total_size = sum(df.memory_usage(deep=True).sum() for df in dfs)  # Get size in bytes
     total_size_mb = total_size / (1024 * 1024)  # Convert to MB
     print(f"Combined size of DataFrames: {total_size_mb:.2f} MB")
@@ -299,7 +318,6 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
     else:
         print(f"Got cached full df from {full_intermediate_df_path}")
         df = pd.read_feather(full_intermediate_df_path)
-        return #TODO: Debug only
 
     # df.index = df["timestamp"]  # Re-add index (in case of old pandas/pyarrow version)
 
