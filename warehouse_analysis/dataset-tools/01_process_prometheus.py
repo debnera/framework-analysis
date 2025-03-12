@@ -2,11 +2,16 @@
 import os
 import os.path
 import traceback
-
+import json
+import zipfile
+import pandas as pd
+import time
+import utils.prometheus_processing as prom_util
+from concurrent.futures import ProcessPoolExecutor
 
 import ujson as json
 
-from utils import utils
+from utils import utils, dataframe_utils
 
 """
 00: Configuration and imports
@@ -34,19 +39,6 @@ zip_files_list = utils.list_zip_files(input_path)
 print("List of zip files:")
 for zip_file in zip_files_list:
     print(zip_file)
-#%%
-"""
-01: Helper functions
-"""
-
-import json
-import zipfile
-import pandas as pd
-import time
-import utils.prometheus_processing as prom_util
-from concurrent.futures import ProcessPoolExecutor
-
-# Open the .7z file
 
 
 def get_slices(zip_file, size_limit_mb):
@@ -90,7 +82,7 @@ def parse_slice(zip_file, slice):
             with zip_ref.open(path) as json_file:
                 parse_metric(json_file, path, values_container)
 
-    values_df = pd.DataFrame(values_container).apply(utils.safe_to_numeric)  # Move to numeric if possible
+    values_df = pd.DataFrame(values_container).apply(dataframe_utils.safe_to_numeric)  # Move to numeric if possible
     return values_df
 
 
@@ -158,7 +150,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
                     continue
                 try:
                     # values.to_feather(output_path)
-                    utils.to_feather_sync(values, output_path)
+                    dataframe_utils.to_feather_sync(values, output_path)
                     # print("sync-write to file")
                 except Exception as e:
                     print(e)
@@ -200,7 +192,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
              ~df.columns.duplicated()]  # TODO: Does removing duplicates remove information? Happens probably at zip-file slice boundaries
         df = df.reset_index(drop=False, inplace=False, names=["timestamp"])  # Reset to default index (in case of old pandas/pyarrow version)
         # df.to_feather(intermediate_folder_path + f"/full.feather")
-        utils.to_feather_sync(df, intermediate_folder_path + f"/full.feather")
+        dataframe_utils.to_feather_sync(df, intermediate_folder_path + f"/full.feather")
         df.index = df["timestamp"]
         df.drop(columns=["timestamp"], inplace=True)
 
@@ -252,7 +244,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
         df_minimized = df_minimized.sort_index().reset_index(drop=False, inplace=False, names=["timestamp"])
         # print(df_minimized.index)
         # df_minimized.to_feather(path + f"/{instance}.feather")
-        utils.to_feather_sync(df_minimized, path + f"/{instance}.feather")
+        dataframe_utils.to_feather_sync(df_minimized, path + f"/{instance}.feather")
 
 
 
@@ -294,4 +286,4 @@ def main():
 #%%
 if __name__ == '__main__':
     main()
-    utils.print_feather_file_stats(output_path)
+    dataframe_utils.print_feather_file_stats(output_path)

@@ -7,7 +7,14 @@ import psutil
 import ujson as json
 from typing import List
 
-from utils import utils
+from utils import utils, dataframe_utils
+
+import json
+import zipfile
+import pandas as pd
+import time
+import utils.prometheus_processing as prom_util
+from concurrent.futures import ProcessPoolExecutor
 
 """
 00: Configuration and imports
@@ -20,14 +27,9 @@ Results are minimized by removing all columns with static values.
 """
 
 # This script will process all zips located at the input_path
-# input_path = "../../data/raw_datasets/8.8_ajot"
-# input_path = "/home/anton/Downloads/ov-ajo"
-# input_path = "../../data/raw_datasets/ov_vs_pytorch"
-# output_path = "../../data/processed/ov_vs_pytorch/prom"
 input_path = "../../data_warehouse/warehouse_6b/snapshots/"
 output_path = "../../data_warehouse/minimized_warehouse_6bb/"
 namespace_filter = "workload"  # Ignore all namespaces that do not have this string in it
-
 run_in_parallel = True  # parallel execution might cause running out of memory
 print_columns = False
 max_parallel_workers = 10  #
@@ -37,22 +39,6 @@ zip_files_list = utils.list_zip_files(input_path)
 print("List of zip files:")
 for zip_file in zip_files_list:
     print(zip_file)
-#%%
-"""
-01: Helper functions
-"""
-
-import json
-import zipfile
-import pandas as pd
-import time
-import utils.prometheus_processing as prom_util
-from concurrent.futures import ProcessPoolExecutor
-
-
-
-
-# Open the .7z file
 
 
 def get_slices(zip_file, size_limit_mb):
@@ -85,14 +71,7 @@ def get_slices(zip_file, size_limit_mb):
 
     return slices
 
-def check_ram():
-    # Check OS memory usage
-    memory_info = psutil.virtual_memory()
-    if memory_info.percent > 80:
-        user_input = input(f"Memory usage is at {memory_info.percent}%. Do you want to continue? (yes/no): ")
-        if user_input.lower() != "yes":
-            print("Aborting due to high memory usage.")
-            sys.exit(1)
+
 
 def parse_slice(zip_file, slice):
     values_container = {}
@@ -119,14 +98,14 @@ def parse_slice(zip_file, slice):
     for key, item in values_container.items():
 
         df = pd.DataFrame({key: item})
-        df = df.apply(utils.safe_to_numeric)  # Move to numeric if possible (reduces size)
+        df = df.apply(dataframe_utils.safe_to_numeric)  # Move to numeric if possible (reduces size)
         if print_columns:
             mem_usage_MB = df.memory_usage(deep=True).sum() / (1024 * 1024)
             num_values = len(item)
             print(f"n={num_values}, MB={mem_usage_MB:.2f}, col={key}")
         dfs.append(df)
 
-    values_df = pd.DataFrame(values_container).apply(utils.safe_to_numeric)  # Move to numeric if possible (reduces size)
+    values_df = pd.DataFrame(values_container).apply(dataframe_utils.safe_to_numeric)  # Move to numeric if possible (reduces size)
 
     print("")
     print(f"values_df after cut size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB "
@@ -229,7 +208,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
                     continue
                 try:
                     # values.to_feather(output_path)
-                    utils.to_feather_sync(values, output_path)
+                    dataframe_utils.to_feather_sync(values, output_path)
                     # print("sync-write to file")
                 except Exception as e:
                     print(e)
@@ -277,7 +256,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
              ~df.columns.duplicated()]  # TODO: Does removing duplicates remove information? Happens probably at zip-file slice boundaries
         df = df.reset_index(drop=False, inplace=False, names=["timestamp"])  # Reset to default index (in case of old pandas/pyarrow version)
         # df.to_feather(intermediate_folder_path + f"/full.feather")
-        utils.to_feather_sync(df, intermediate_folder_path + f"/full.feather")
+        dataframe_utils.to_feather_sync(df, intermediate_folder_path + f"/full.feather")
         df.index = df["timestamp"]
         df.drop(columns=["timestamp"], inplace=True)
 
@@ -328,7 +307,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
         df_minimized = df_minimized.sort_index().reset_index(drop=False, inplace=False, names=["timestamp"])
         # print(df_minimized.index)
         # df_minimized.to_feather(path + f"/{instance}.feather")
-        utils.to_feather_sync(df_minimized, path + f"/{instance}.feather")
+        dataframe_utils.to_feather_sync(df_minimized, path + f"/{instance}.feather")
 
 
 
@@ -367,5 +346,5 @@ def main():
 #%%
 if __name__ == '__main__':
     main()
-    utils.print_feather_file_stats(output_path)
+    dataframe_utils.print_feather_file_stats(output_path)
 
