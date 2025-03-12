@@ -24,18 +24,58 @@ Results are minimized by removing all columns with static values.
 # input_path = "/home/anton/Downloads/ov-ajo"
 # input_path = "../../data/raw_datasets/ov_vs_pytorch"
 # output_path = "../../data/processed/ov_vs_pytorch/prom"
-input_path = "../../data_warehouse/warehouse_7c/snapshots/"
-output_path = "../../data_warehouse/minimized_warehouse_7c/"
+input_path = "../../data_warehouse/warehouse_6b/snapshots/"
+output_path = "../../data_warehouse/minimized_warehouse_6bb/"
 namespace_filter = "workload"  # Ignore all namespaces that do not have this string in it
 
 run_in_parallel = True  # parallel execution might cause running out of memory
-max_parallel_workers = 3  #
+print_columns = False
+max_parallel_workers = 10  #
 
 zip_files_list = utils.list_zip_files(input_path)
 
 print("List of zip files:")
 for zip_file in zip_files_list:
     print(zip_file)
+#%%
+def print_statistics():
+    """
+    03: Print some statistics from the resulting dataframes
+
+    - Mostly for quick sanity checking of the results
+    """
+    import os
+    import pandas as pd
+
+    def count_feather_files(fpath):
+        feather_files = []
+        file_info = []
+        for root, dirs, files in os.walk(fpath):
+            for file in files:
+                if file.endswith(".feather"):
+                    file_path = os.path.join(root, file)
+                    feather_files.append(file_path)
+
+        for file_path in feather_files:
+            try:
+                df = pd.read_feather(file_path)
+                file_size = os.path.getsize(file_path)
+                file_info.append((file_path, file_size, len(df.columns), len(df)))
+            except pd.errors.EmptyDataError:
+                file_info.append((file_path, 0, 0, 0))
+            except Exception as e:
+                file_info.append((file_path, -1, -1, -1))
+
+        file_info.sort(key=lambda x: x[1], reverse=True)  # Sort based on file size in descending order
+
+        for info in file_info:
+            print("Size:", info[1] / 10**6, "mb", end="\t")
+            print("Cols:", info[2], end="\t")
+            print("Rows:", info[3], end="\t")
+            print("File:", info[0].replace(fpath, ""))
+
+    # Provide the path to the folder containing the feather files
+    count_feather_files(output_path)
 #%%
 """
 01: Helper functions
@@ -47,6 +87,13 @@ import pandas as pd
 import time
 import utils.prometheus_processing as prom_util
 from concurrent.futures import ProcessPoolExecutor
+
+def safe_to_numeric(series):
+    try:
+        return pd.to_numeric(series)
+    except (ValueError, TypeError):
+        return series
+
 
 # Open the .7z file
 def to_feather_sync(df: pd.DataFrame, path):
@@ -125,14 +172,17 @@ def parse_slice(zip_file, slice):
 
     dfs = []
     for key, item in values_container.items():
-        print(f"{key}: {len(item)}")
+
         df = pd.DataFrame({key: item})
-        df = df.apply(pd.to_numeric, errors='ignore')  # Move to numeric if possible, cutting off 90% of size
-        print(f"{key}: {df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB")
+        df = df.apply(safe_to_numeric)  # Move to numeric if possible (reduces size)
+        if print_columns:
+            mem_usage_MB = df.memory_usage(deep=True).sum() / (1024 * 1024)
+            num_values = len(item)
+            print(f"n={num_values}, MB={mem_usage_MB:.2f}, col={key}")
         dfs.append(df)
 
-    values_df = pd.DataFrame(values_container).apply(pd.to_numeric,
-                                                     errors='ignore')  # Move to numeric if possible, cutting off 90% of size
+    values_df = pd.DataFrame(values_container).apply(safe_to_numeric)  # Move to numeric if possible (reduces size)
+
     print("")
     print(f"values_df after cut size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB "
           f"(rows: {len(values_df)}, columns: {len(values_df.columns)})")
@@ -161,7 +211,7 @@ def parse_slice2(zip_file, slice):
     # print("Creating df from values_container...")
     # values_df = pd.DataFrame(values_container)
     print(f"values_df size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB")
-    values_df = values_df.apply(pd.to_numeric, errors='ignore')  # Move to numeric if possible, cutting off 90% of size
+    values_df = pd.DataFrame(values_container).apply(safe_to_numeric)  # Move to numeric if possible  (reduces size)
     print(f"values_df after cut size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB")
     return values_df
 
@@ -327,7 +377,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
     # Minimize headers and save each instance as separate file
     for instance, sub_df in sub_dfs.items():
         df_minimized = sub_df.copy()
-        # df_minimized.index = df_minimized["timestamp"] # 
+        # df_minimized.index = df_minimized["timestamp"] #
         # df_minimized.drop("index", axis=1, inplace=True)
 
         # Group headers by name
@@ -397,45 +447,6 @@ def main():
         except Exception as e:
             print(f"Exception raised in sequential processing: {e}")
 
-#%%
-def print_statistics():
-    """
-    03: Print some statistics from the resulting dataframes
-
-    - Mostly for quick sanity checking of the results
-    """
-    import os
-    import pandas as pd
-
-    def count_feather_files(fpath):
-        feather_files = []
-        file_info = []
-        for root, dirs, files in os.walk(fpath):
-            for file in files:
-                if file.endswith(".feather"):
-                    file_path = os.path.join(root, file)
-                    feather_files.append(file_path)
-
-        for file_path in feather_files:
-            try:
-                df = pd.read_feather(file_path)
-                file_size = os.path.getsize(file_path)
-                file_info.append((file_path, file_size, len(df.columns), len(df)))
-            except pd.errors.EmptyDataError:
-                file_info.append((file_path, 0, 0, 0))
-            except Exception as e:
-                file_info.append((file_path, -1, -1, -1))
-
-        file_info.sort(key=lambda x: x[1], reverse=True)  # Sort based on file size in descending order
-
-        for info in file_info:
-            print("Size:", info[1] / 10**6, "mb", end="\t")
-            print("Cols:", info[2], end="\t")
-            print("Rows:", info[3], end="\t")
-            print("File:", info[0].replace(fpath, ""))
-
-    # Provide the path to the folder containing the feather files
-    count_feather_files(output_path)
 #%%
 if __name__ == '__main__':
     main()

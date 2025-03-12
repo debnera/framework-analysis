@@ -1,6 +1,8 @@
 #%%
 import os
 import os.path
+import traceback
+
 
 import ujson as json
 
@@ -21,11 +23,11 @@ Results are minimized by removing all columns with static values.
 # input_path = "/home/anton/Downloads/ov-ajo"
 # input_path = "../../data/raw_datasets/ov_vs_pytorch"
 # output_path = "../../data/processed/ov_vs_pytorch/prom"
-input_path = "../../data_warehouse/warehouse_7b/snapshots/"
-output_path = "../../data_warehouse/minimized_warehouse_7b/"
+input_path = "../../data_warehouse/warehouse_6b/snapshots/"
+output_path = "../../data_warehouse/minimized_warehouse_6b/"
 
-run_in_parallel = False  # parallel execution might cause running out of memory
-max_parallel_workers = 10  #
+run_in_parallel = True  # parallel execution might cause running out of memory
+max_parallel_workers = 5  #
 
 zip_files_list = utils.list_zip_files(input_path)
 
@@ -176,12 +178,14 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
                 # print(f"Saved intermediate {output_path}")
             values.index = values["timestamp"]
             values.drop(columns=["timestamp"], inplace=True)
+            dfs.append(values)
 
-            if len(dfs) == 0:
-                dfs.append(values)
-            else:
-                df = pd.merge(dfs[0], values, how="outer")
-                dfs[0] = df
+            # What is happening here? (merge fails, because it is done across one df)
+            # if len(dfs) == 0:
+            #     dfs.append(values)
+            # else:
+            #     df = pd.merge(dfs[0], values, how="outer")
+            #     dfs[0] = df
             """ Old style: (probably removes data)
             if not process_intermediate_only:
                 dfs.append(values)
@@ -283,12 +287,14 @@ def main():
                     future.result()
                 except Exception as e:
                     print(f"Exception raised in parallel processing: {e}")
+                    traceback.print_exc()
     else:
         for zip_name_full in zips:
             try:
                 process_zip(input_path, zip_name_full, output_path, process_intermediate_only=True)
             except Exception as e:
                 print(f"Exception raised in sequential processing: {e}")
+                traceback.print_exc()
 
     """ Then read all intermediate files to memory and combine them into one big dataframe per zip file """
     for zip_name_full in zips:
@@ -296,6 +302,7 @@ def main():
             process_zip(input_path, zip_name_full, output_path, process_intermediate_only=False)
         except Exception as e:
             print(f"Exception raised in sequential processing: {e}")
+            traceback.print_exc()
 
 #%%
 def print_statistics():
