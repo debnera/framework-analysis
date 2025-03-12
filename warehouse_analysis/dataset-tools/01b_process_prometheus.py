@@ -38,45 +38,6 @@ print("List of zip files:")
 for zip_file in zip_files_list:
     print(zip_file)
 #%%
-def print_statistics():
-    """
-    03: Print some statistics from the resulting dataframes
-
-    - Mostly for quick sanity checking of the results
-    """
-    import os
-    import pandas as pd
-
-    def count_feather_files(fpath):
-        feather_files = []
-        file_info = []
-        for root, dirs, files in os.walk(fpath):
-            for file in files:
-                if file.endswith(".feather"):
-                    file_path = os.path.join(root, file)
-                    feather_files.append(file_path)
-
-        for file_path in feather_files:
-            try:
-                df = pd.read_feather(file_path)
-                file_size = os.path.getsize(file_path)
-                file_info.append((file_path, file_size, len(df.columns), len(df)))
-            except pd.errors.EmptyDataError:
-                file_info.append((file_path, 0, 0, 0))
-            except Exception as e:
-                file_info.append((file_path, -1, -1, -1))
-
-        file_info.sort(key=lambda x: x[1], reverse=True)  # Sort based on file size in descending order
-
-        for info in file_info:
-            print("Size:", info[1] / 10**6, "mb", end="\t")
-            print("Cols:", info[2], end="\t")
-            print("Rows:", info[3], end="\t")
-            print("File:", info[0].replace(fpath, ""))
-
-    # Provide the path to the folder containing the feather files
-    count_feather_files(output_path)
-#%%
 """
 01: Helper functions
 """
@@ -88,27 +49,11 @@ import time
 import utils.prometheus_processing as prom_util
 from concurrent.futures import ProcessPoolExecutor
 
-def safe_to_numeric(series):
-    try:
-        return pd.to_numeric(series)
-    except (ValueError, TypeError):
-        return series
+
 
 
 # Open the .7z file
-def to_feather_sync(df: pd.DataFrame, path):
-    # Save to feather as usual
-    if len(df) == 0:
-        print(f"Cannot save empty dataframe! {path}")
-        return
-    path = path.replace(":", "-")  # Saving with names like 10.192.33.1:3000 fail because of the port number
-    memory_size = df.memory_usage(deep=True).sum() / (1024 * 1024)  # Convert bytes to MB
-    df.to_feather(path)
-    print(f"Saved {path} (df size in memory: {memory_size:.2f} MB, rows: {len(df)}, columns: {len(df.columns)})")
-    # Force OS to write the file to disk (multithreaded writing seems to fully fill memory without this)
-    with open (path, "rb+") as f:
-        os.fsync(f.fileno())
-    # print(f"Verified that {path} is saved on disk.")
+
 
 def get_slices(zip_file, size_limit_mb):
     if zip_file.endswith(".zip"):
@@ -174,47 +119,19 @@ def parse_slice(zip_file, slice):
     for key, item in values_container.items():
 
         df = pd.DataFrame({key: item})
-        df = df.apply(safe_to_numeric)  # Move to numeric if possible (reduces size)
+        df = df.apply(utils.safe_to_numeric)  # Move to numeric if possible (reduces size)
         if print_columns:
             mem_usage_MB = df.memory_usage(deep=True).sum() / (1024 * 1024)
             num_values = len(item)
             print(f"n={num_values}, MB={mem_usage_MB:.2f}, col={key}")
         dfs.append(df)
 
-    values_df = pd.DataFrame(values_container).apply(safe_to_numeric)  # Move to numeric if possible (reduces size)
+    values_df = pd.DataFrame(values_container).apply(utils.safe_to_numeric)  # Move to numeric if possible (reduces size)
 
     print("")
     print(f"values_df after cut size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB "
           f"(rows: {len(values_df)}, columns: {len(values_df.columns)})")
     return values_df
-
-def parse_slice2(zip_file, slice):
-    index = 0
-    values_df = None
-    with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-        for path in slice:
-            values_container = {}
-            check_ram()
-            size_in_megabytes = zip_ref.getinfo(path).file_size / (1024 * 1024)
-            print(f"\t{index}: {size_in_megabytes} MB, {path}")
-            index += 1
-            with zip_ref.open(path) as json_file:
-                parse_metric(json_file, path, values_container)
-            container_size = sum(sys.getsizeof(v) for v in values_container.values()) / (1024 * 1024)
-            print(f"Current size of values_container: {container_size:.2f} MB, {len(values_container)} entries")
-            if values_df is None:
-                values_df = pd.DataFrame(values_container)
-            else:
-                values_df = pd.merge(values_df, pd.DataFrame(values_container), how="outer")
-            print(f"Current size in memory: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB, rows: {len(values_df)}, columns: {len(values_df.columns)}")
-
-    # print("Creating df from values_container...")
-    # values_df = pd.DataFrame(values_container)
-    print(f"values_df size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB")
-    values_df = pd.DataFrame(values_container).apply(safe_to_numeric)  # Move to numeric if possible  (reduces size)
-    print(f"values_df after cut size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB")
-    return values_df
-
 
 def get_folders(zip_file, size_limit_mb):
     if zip_file.endswith(".zip"):
@@ -312,7 +229,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
                     continue
                 try:
                     # values.to_feather(output_path)
-                    to_feather_sync(values, output_path)
+                    utils.to_feather_sync(values, output_path)
                     # print("sync-write to file")
                 except Exception as e:
                     print(e)
@@ -360,7 +277,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
              ~df.columns.duplicated()]  # TODO: Does removing duplicates remove information? Happens probably at zip-file slice boundaries
         df = df.reset_index(drop=False, inplace=False, names=["timestamp"])  # Reset to default index (in case of old pandas/pyarrow version)
         # df.to_feather(intermediate_folder_path + f"/full.feather")
-        to_feather_sync(df, intermediate_folder_path + f"/full.feather")
+        utils.to_feather_sync(df, intermediate_folder_path + f"/full.feather")
         df.index = df["timestamp"]
         df.drop(columns=["timestamp"], inplace=True)
 
@@ -411,7 +328,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
         df_minimized = df_minimized.sort_index().reset_index(drop=False, inplace=False, names=["timestamp"])
         # print(df_minimized.index)
         # df_minimized.to_feather(path + f"/{instance}.feather")
-        to_feather_sync(df_minimized, path + f"/{instance}.feather")
+        utils.to_feather_sync(df_minimized, path + f"/{instance}.feather")
 
 
 
@@ -450,4 +367,5 @@ def main():
 #%%
 if __name__ == '__main__':
     main()
-    print_statistics()
+    utils.print_feather_file_stats(output_path)
+
