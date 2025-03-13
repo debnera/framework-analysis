@@ -38,13 +38,16 @@ for zip_file in zip_files_list:
     print(zip_file)
 
 
-def parse_slice(zip_file: str, slice: List[str]) -> pd.DataFrame:
+def parse_slice(zip_file: str, slice: List[str], debug_prints=False) -> pd.DataFrame:
     values_container = {}
     index = 0
+
+    # Parse metrics from json files to a dict
     with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-        total_size = sum(zip_ref.getinfo(path).file_size for path in slice) / (1024 * 1024)  # Convert to MB
-        parent_folder = os.path.dirname(slice[0])  # Get the parent directory of the first file
-        print(f"Processing {parent_folder} (size: {total_size:.2f} MB, files {len(slice)})")
+        if debug_prints:
+            total_size = sum(zip_ref.getinfo(path).file_size for path in slice) / (1024 * 1024)  # Convert to MB
+            parent_folder = os.path.dirname(slice[0])  # Get the parent directory of the first file
+            print(f"Processing {parent_folder} (size: {total_size:.2f} MB, files {len(slice)})")
         filtered_out = 0
         no_namespace = 0
         for path in slice:
@@ -54,9 +57,10 @@ def parse_slice(zip_file: str, slice: List[str]) -> pd.DataFrame:
                 a, b = parse_metric(json_file, path, values_container)
                 filtered_out += a
                 no_namespace += b
-        print(f"\nFiltered out: {filtered_out}, no namespace: {no_namespace}")
+        if debug_prints:
+            print(f"\nFiltered out: {filtered_out}, no namespace: {no_namespace}")
 
-
+    # Create dataframes from dict one metric at a time (NOTE: creating a df in one pass caused issues?)
     dfs = []
     for key, item in values_container.items():
 
@@ -68,11 +72,13 @@ def parse_slice(zip_file: str, slice: List[str]) -> pd.DataFrame:
             print(f"n={num_values}, MB={mem_usage_MB:.2f}, col={key}")
         dfs.append(df)
 
-    values_df = pd.DataFrame(values_container).apply(dataframe_utils.safe_to_numeric)  # Move to numeric if possible (reduces size)
+    # Move to numeric if possible (reduces size)
+    values_df = pd.DataFrame(values_container).apply(dataframe_utils.safe_to_numeric)
 
-    print("")
-    print(f"values_df after cut size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB "
-          f"(rows: {len(values_df)}, columns: {len(values_df.columns)})")
+    if debug_prints:
+        print("")
+        print(f"values_df after cut size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB "
+              f"(rows: {len(values_df)}, columns: {len(values_df.columns)})")
     return values_df
 
 
