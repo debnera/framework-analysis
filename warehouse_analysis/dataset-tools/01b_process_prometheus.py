@@ -1,15 +1,12 @@
 #%%
 import os
 import os.path
-import sys
 
-import psutil
 import ujson as json
 from typing import List
 
-from utils import utils, dataframe_utils
+from utils import utils, dataframe_utils, slice_utils
 
-import json
 import zipfile
 import pandas as pd
 import time
@@ -28,7 +25,7 @@ Results are minimized by removing all columns with static values.
 
 # This script will process all zips located at the input_path
 input_path = "../../data_warehouse/warehouse_6b/snapshots/"
-output_path = "../../data_warehouse/minimized_warehouse_6bb/"
+output_path = "../../data_warehouse/minimized_warehouse_6bbb/"
 namespace_filter = "workload"  # Ignore all namespaces that do not have this string in it
 run_in_parallel = True  # parallel execution might cause running out of memory
 print_columns = False
@@ -41,39 +38,7 @@ for zip_file in zip_files_list:
     print(zip_file)
 
 
-def get_slices(zip_file, size_limit_mb):
-    if zip_file.endswith(".zip"):
-        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-            items = zip_ref.namelist()
-            json_files = [x for x in items if x.endswith('.json')]
-            json_files_info = [(x, zip_ref.getinfo(x)) for x in json_files]
-            json_files_info = sorted(json_files_info, key=lambda x: x[1].file_size, reverse=True)
-    else:
-        print(f"Cannot parse {zip_file}")
-
-    total_file_size = sum(info.file_size for _, info in json_files_info)
-    slice_limit = size_limit_mb * 1024 * 1024  # 100MB in bytes
-    slices = []
-    current_slice = []
-    current_size = 0
-
-    for file_name, file_info in json_files_info:
-        if current_size + file_info.file_size <= slice_limit:
-            current_slice.append(file_name)
-            current_size += file_info.file_size
-        else:
-            slices.append(current_slice)
-            current_slice = [file_name]
-            current_size = file_info.file_size
-
-    if current_slice:
-        slices.append(current_slice)
-
-    return slices
-
-
-
-def parse_slice(zip_file, slice):
+def parse_slice(zip_file: str, slice: List[str]) -> pd.DataFrame:
     values_container = {}
     index = 0
     with zipfile.ZipFile(zip_file, 'r') as zip_ref:
@@ -83,8 +48,6 @@ def parse_slice(zip_file, slice):
         filtered_out = 0
         no_namespace = 0
         for path in slice:
-            # size_in_megabytes = zip_ref.getinfo(path).file_size / (1024 * 1024)
-            # print(f"\t{index}: {size_in_megabytes} MB, {path}")
             print(f" {index}", end="")
             index += 1
             with zip_ref.open(path) as json_file:
@@ -112,23 +75,11 @@ def parse_slice(zip_file, slice):
           f"(rows: {len(values_df)}, columns: {len(values_df.columns)})")
     return values_df
 
-def get_folders(zip_file, size_limit_mb):
-    if zip_file.endswith(".zip"):
-        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
-            items = zip_ref.namelist()
-            json_files = [x for x in items if x.endswith('.json')]
-            folders = {}
-            for file in json_files:
-                folder = os.path.dirname(file)
-                if folder not in folders:
-                    folders[folder] = []
-                folders[folder].append(file)
-    else:
-        print(f"Cannot parse {zip_file}")
 
-    return list(folders.values())
 
-def parse_metric(data, path, values_container):
+
+
+def parse_metric(data: bytes, path: str, values_container: dict) -> tuple[int, int]:
     json_data = json.load(data)
     # print(path)
 
@@ -161,12 +112,13 @@ def parse_metric(data, path, values_container):
         print(f"An unexpected error occurred while parsing JSON file '{path}': {e}")
     return filtered_out, no_namespace
 
-def print_combined_size_dataframes(dfs: List[pd.DataFrame]):
-    total_size = sum(df.memory_usage(deep=True).sum() for df in dfs)  # Get size in bytes
-    total_size_mb = total_size / (1024 * 1024)  # Convert to MB
-    print(f"Combined size of DataFrames: {total_size_mb:.2f} MB")
 
-def process_zip(input_path, zip_relative_path, output_path2, process_intermediate_only):
+
+
+
+def process_zip(
+        input_path: str, zip_relative_path: str, output_path2: str, process_intermediate_only: bool
+) -> None:
     dfs = []
     print(f"Processing {zip_relative_path}")
     zip_name = zip_relative_path.replace(".zip", "")  # Remove file-extension for now
@@ -176,9 +128,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
     processed_folder_path = f"{full_output_path}/"
     start_time = time.time()
     if not os.path.exists(full_intermediate_df_path):
-        max_slice_size_mb = 200
-        # slices = get_slices(f"{input_path}/{zip_relative_path}", max_slice_size_mb)
-        slices = get_folders(f"{input_path}/{zip_relative_path}", max_slice_size_mb)
+        slices = slice_utils.get_slices_by_folder(f"{input_path}/{zip_relative_path}")
         for i, slice in enumerate(slices):
             os.makedirs(intermediate_folder_path, exist_ok=True)
             output_path = intermediate_folder_path + f"/{i}.feather"
@@ -207,9 +157,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
                     # Cannot save empty dataframes - nothing to do here
                     continue
                 try:
-                    # values.to_feather(output_path)
                     dataframe_utils.to_feather_sync(values, output_path)
-                    # print("sync-write to file")
                 except Exception as e:
                     print(e)
                 # print(f"Saved intermediate {output_path}")
@@ -217,35 +165,11 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
                 values.index = values["timestamp"]
                 values.drop(columns=["timestamp"], inplace=True)
                 dfs.append(values)
-                print_combined_size_dataframes(dfs)
+                dataframe_utils.print_combined_size_dataframes(dfs)
 
-            # if not process_intermediate_only:
-            #     if len(dfs) == 0:
-            #         dfs = [values]
-            #     else:
-            #         df = pd.merge(dfs[0], values, how="outer")
-            #         print(f"Current size in memory: {df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB (rows: {len(df)}, columns: {len(df.columns)})")
-            #         dfs = [df]
-            """ Old style: (probably removes data)
-            if not process_intermediate_only:
-                dfs.append(values)
-                if len(dfs) > 2:
-                    # Try to minimize memory usage
-                    df = pd.concat(dfs, axis=1)
-                    print(df.columns[df.columns.duplicated()])
-                    print(f"Current size in memory: {df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB")
-                    df = df.loc[:,
-                         ~df.columns.duplicated()]  # TODO: Does removing duplicates remove information? Happens probably at zip-file slice boundaries
-                    print(f"Current size in memory: {df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB")
-                    dfs = [df]
-                # print("append to dfs")
-            """
         if process_intermediate_only:
             return
         try:
-            # df = dfs[0]
-            # df.index = df["timestamp"]
-            # df.drop(columns=["timestamp"], inplace=True)
             df = pd.concat(dfs, axis=1)
 
         except Exception as e:
@@ -260,12 +184,9 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
         df.index = df["timestamp"]
         df.drop(columns=["timestamp"], inplace=True)
 
-        # print(f"Saved full df to {intermediate_folder_path}/full.feather")
     else:
         print(f"Got cached full df from {full_intermediate_df_path}")
         df = pd.read_feather(full_intermediate_df_path)
-
-    # df.index = df["timestamp"]  # Re-add index (in case of old pandas/pyarrow version)
 
     # Split df by instance
     sub_dfs = prom_util.sub_df_by_instance(df)
@@ -273,8 +194,6 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
     # Minimize headers and save each instance as separate file
     for instance, sub_df in sub_dfs.items():
         df_minimized = sub_df.copy()
-        # df_minimized.index = df_minimized["timestamp"] #
-        # df_minimized.drop("index", axis=1, inplace=True)
 
         # Group headers by name
         grouped_by_name = {}
@@ -310,8 +229,7 @@ def process_zip(input_path, zip_relative_path, output_path2, process_intermediat
         dataframe_utils.to_feather_sync(df_minimized, path + f"/{instance}.feather")
 
 
-
-def main():
+def main() -> None:
     """
     02: Process and save dataframes
     """

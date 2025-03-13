@@ -1,4 +1,6 @@
 import os
+from typing import List
+
 import pandas as pd
 
 def print_feather_file_stats(folder_path, print_limit=20):
@@ -61,3 +63,8 @@ def safe_to_numeric(series):
         return pd.to_numeric(series)
     except (ValueError, TypeError):
         return series
+
+def print_combined_size_dataframes(dfs: List[pd.DataFrame]) -> None:
+    total_size = sum(df.memory_usage(deep=True).sum() for df in dfs)  # Get size in bytes
+    total_size_mb = total_size / (1024 * 1024)  # Convert to MB
+    print(f"Combined size of DataFrames: {total_size_mb:.2f} MB")
