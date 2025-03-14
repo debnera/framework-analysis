@@ -3,7 +3,7 @@ import os
 import os.path
 
 import ujson as json
-from typing import List
+from typing import List, Tuple, Dict
 
 from utils import utils, dataframe_utils, slice_utils
 
@@ -37,8 +37,13 @@ print("List of zip files:")
 for zip_file in zip_files_list:
     print(zip_file)
 
+def parse_slice_to_dict(zip_file: str, slice: List[str], debug_prints=False) -> Dict[Dict]:
+    """
+    From the given zip-file, parse a set (slice) of metrics into a dict.
 
-def parse_slice(zip_file: str, slice: List[str], debug_prints=False) -> pd.DataFrame:
+    Dict format is expected to be a dict of dicts. Example:
+        values_container[metric_header] = {timestamp: value}
+    """
     values_container = {}
     index = 0
 
@@ -60,7 +65,15 @@ def parse_slice(zip_file: str, slice: List[str], debug_prints=False) -> pd.DataF
         if debug_prints:
             print(f"\nFiltered out: {filtered_out}, no namespace: {no_namespace}")
 
-    # Create dataframes from dict one metric at a time (NOTE: creating a df in one pass caused issues?)
+    return values_container
+
+def metrics_dict_to_dataframe(values_container: Dict[Dict]) -> pd.DataFrame:
+    """
+    Create dataframes from dict one metric at a time.
+
+    Dict format is expected to be a dict of dicts. Example:
+        values_container[metric_header] = {timestamp: value}
+    """
     dfs = []
     for key, item in values_container.items():
 
@@ -74,18 +87,16 @@ def parse_slice(zip_file: str, slice: List[str], debug_prints=False) -> pd.DataF
 
     # Move to numeric if possible (reduces size)
     values_df = pd.DataFrame(values_container).apply(dataframe_utils.safe_to_numeric)
-
-    if debug_prints:
-        print("")
-        print(f"values_df after cut size: {values_df.memory_usage(deep=True).sum() / (1024 * 1024):.2f} MB "
-              f"(rows: {len(values_df)}, columns: {len(values_df.columns)})")
     return values_df
 
 
+def parse_metric(data: bytes, path: str, values_container: dict) -> Tuple[int, int]:
+    """
+    Parses
 
-
-
-def parse_metric(data: bytes, path: str, values_container: dict) -> tuple[int, int]:
+    Dict format is expected to be a dict of dicts. Example:
+        values_container[metric_header] = {timestamp: value}
+    """
     json_data = json.load(data)
     # print(path)
 
@@ -119,80 +130,122 @@ def parse_metric(data: bytes, path: str, values_container: dict) -> tuple[int, i
     return filtered_out, no_namespace
 
 
+def create_intermediate_files(input_path: str, zip_relative_path: str, output_path2: str, process_intermediate_only: bool):
+    print(f"Processing {zip_relative_path}")
+    zip_name = zip_relative_path.replace(".zip", "")  # Remove file-extension for now
+    full_output_path = f"{output_path2}/{zip_name}".replace(" ", "")  # Strip whitespace
+    intermediate_folder_path = f"{full_output_path}/intermediate"
+    os.makedirs(intermediate_folder_path, exist_ok=True)
+    full_intermediate_df_path = f"{intermediate_folder_path}/full.feather"  # Combined df from all intermediate files
+    processed_folder_path = f"{full_output_path}/"
 
+    # Process one slice at a time
+    slices = slice_utils.get_slices_by_folder(f"{input_path}/{zip_relative_path}")
+    for i, slice in enumerate(slices):
+        output_path = intermediate_folder_path + f"/{i}.feather"
+        if os.path.exists(output_path):
+            print(f"Skipping intermediate {output_path} because it already exists")
+            continue
+
+        # Process slice
+        values_container = parse_slice_to_dict(zip_file, slice, debug_prints=False)
+        values = metrics_dict_to_dataframe(values_container)
+
+        # Do some (destructive?) preprocessing
+        values.reset_index(drop=False, inplace=True, names=["timestamp"])  # Reset to default index (in case of old pandas/pyarrow version)
+        unique_counts = values.nunique()
+        static_columns = unique_counts[unique_counts <= 2].index  # TODO: Could be dangerous to remove all static columns?
+        values.drop(static_columns, axis=1, inplace=True)
+
+        # Save to disk
+        if len(values) == 0:
+            # Cannot save empty dataframes - nothing to do here
+            continue
+        try:
+            dataframe_utils.to_feather_sync(values, output_path)
+        except Exception as e:
+            print(e)
+
+def process_intermediate_feathers(output_path: str):
+    dfs = []
+    feather_files = [file for file in os.listdir(output_path) if file.endswith('.feather')]
+    for feather_file in feather_files:
+        file_path = os.path.join(output_path, feather_file)
+        dfs.append(pd.read_feather(file_path))
+    
 
 
 def process_zip(
-        input_path: str, zip_relative_path: str, output_path2: str, process_intermediate_only: bool
-) -> None:
+        input_path: str, zip_relative_path: str, output_path2: str, process_intermediate_only: bool) -> None:
     dfs = []
+
+    # Construct paths
     print(f"Processing {zip_relative_path}")
     zip_name = zip_relative_path.replace(".zip", "")  # Remove file-extension for now
     full_output_path = f"{output_path2}/{zip_name}".replace(" ", "")  # Strip whitespace
     intermediate_folder_path = f"{full_output_path}/intermediate"
     full_intermediate_df_path = f"{intermediate_folder_path}/full.feather"  # Combined df from all intermediate files
     processed_folder_path = f"{full_output_path}/"
-    start_time = time.time()
-    if not os.path.exists(full_intermediate_df_path):
-        slices = slice_utils.get_slices_by_folder(f"{input_path}/{zip_relative_path}")
-        for i, slice in enumerate(slices):
-            os.makedirs(intermediate_folder_path, exist_ok=True)
-            output_path = intermediate_folder_path + f"/{i}.feather"
-            if os.path.exists(output_path):
-                if process_intermediate_only:
-                    print(f"Skipping intermediate {output_path} because it already exists")
-                    continue
-                else:
-                    values = pd.read_feather(output_path)
-                    print(f"Got intermediate file from {output_path}")
+    if os.path.exists(full_intermediate_df_path):
+        print(f"Skipping previously processed zip {input_path} as full df already exists: {full_intermediate_df_path}")
+        return
+
+
+    slices = slice_utils.get_slices_by_folder(f"{input_path}/{zip_relative_path}")
+    for i, slice in enumerate(slices):
+        os.makedirs(intermediate_folder_path, exist_ok=True)
+        output_path = intermediate_folder_path + f"/{i}.feather"
+        if os.path.exists(output_path):
+            if process_intermediate_only:
+                print(f"Skipping intermediate {output_path} because it already exists")
+                continue
             else:
-                # print(f"Parsing slice {i} of {len(slices)}")
-                values = parse_slice(
-                    zip_file=f'{input_path}/{zip_relative_path}',
-                    slice=slice,
-                )
-                # values = values.apply(pd.to_numeric, errors='coerce')
-                # print("got vals")
-                values.reset_index(drop=False, inplace=True, names=["timestamp"])  # Reset to default index (in case of old pandas/pyarrow version)
-                # print("reset index")
-                unique_counts = values.nunique()
-                static_columns = unique_counts[unique_counts <= 2].index
-                values.drop(static_columns, axis=1, inplace=True)
-                # print("drop static")
-                if len(values) == 0:
-                    # Cannot save empty dataframes - nothing to do here
-                    continue
-                try:
-                    dataframe_utils.to_feather_sync(values, output_path)
-                except Exception as e:
-                    print(e)
-                # print(f"Saved intermediate {output_path}")
-            if not process_intermediate_only:
-                values.index = values["timestamp"]
-                values.drop(columns=["timestamp"], inplace=True)
-                dfs.append(values)
-                dataframe_utils.print_combined_size_dataframes(dfs)
+                values = pd.read_feather(output_path)
+                print(f"Got intermediate file from {output_path}")
+        else:
+            # print(f"Parsing slice {i} of {len(slices)}")
+            values = parse_slice(
+                zip_file=f'{input_path}/{zip_relative_path}',
+                slice=slice,
+            )
+            # values = values.apply(pd.to_numeric, errors='coerce')
+            # print("got vals")
+            values.reset_index(drop=False, inplace=True, names=["timestamp"])  # Reset to default index (in case of old pandas/pyarrow version)
+            # print("reset index")
+            unique_counts = values.nunique()
+            static_columns = unique_counts[unique_counts <= 2].index
+            values.drop(static_columns, axis=1, inplace=True)
+            # print("drop static")
+            if len(values) == 0:
+                # Cannot save empty dataframes - nothing to do here
+                continue
+            try:
+                dataframe_utils.to_feather_sync(values, output_path)
+            except Exception as e:
+                print(e)
+            # print(f"Saved intermediate {output_path}")
+        if not process_intermediate_only:
+            values.index = values["timestamp"]
+            values.drop(columns=["timestamp"], inplace=True)
+            dfs.append(values)
+            dataframe_utils.print_combined_size_dataframes(dfs)
 
-        if process_intermediate_only:
-            return
-        try:
-            df = pd.concat(dfs, axis=1)
+    if process_intermediate_only:
+        return
+    try:
+        df = pd.concat(dfs, axis=1)
 
-        except Exception as e:
-            # This can happen if the zip did not contain any prometheus data (e.g., it contains yolo-data only)
-            print(e)
-            return
-        df = df.loc[:,
-             ~df.columns.duplicated()]  # TODO: Does removing duplicates remove information? Happens probably at zip-file slice boundaries
-        df = df.reset_index(drop=False, inplace=False, names=["timestamp"])  # Reset to default index (in case of old pandas/pyarrow version)
-        # df.to_feather(intermediate_folder_path + f"/full.feather")
-        dataframe_utils.to_feather_sync(df, intermediate_folder_path + f"/full.feather")
-        df.index = df["timestamp"]
-        df.drop(columns=["timestamp"], inplace=True)
-
-    else:
-        print(f"Got cached full df from {full_intermediate_df_path}")
-        df = pd.read_feather(full_intermediate_df_path)
+    except Exception as e:
+        # This can happen if the zip did not contain any prometheus data (e.g., it contains yolo-data only)
+        print(e)
+        return
+    df = df.loc[:,
+         ~df.columns.duplicated()]  # TODO: Does removing duplicates remove information? Happens probably at zip-file slice boundaries
+    df = df.reset_index(drop=False, inplace=False, names=["timestamp"])  # Reset to default index (in case of old pandas/pyarrow version)
+    # df.to_feather(intermediate_folder_path + f"/full.feather")
+    dataframe_utils.to_feather_sync(df, intermediate_folder_path + f"/full.feather")
+    df.index = df["timestamp"]
+    df.drop(columns=["timestamp"], inplace=True)
 
     # Split df by instance
     sub_dfs = prom_util.sub_df_by_instance(df)
