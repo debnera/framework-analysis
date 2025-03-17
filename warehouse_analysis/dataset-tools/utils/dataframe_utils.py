@@ -40,6 +40,7 @@ def print_feather_file_stats(folder_path, print_limit=20):
         print("File:", info[0].replace(folder_path, ""))
         if i >= print_limit:
             print(f"Printed only the first {print_limit} of {len(file_info)} files.")
+            break
 
 
 def to_feather_sync(df: pd.DataFrame, path):

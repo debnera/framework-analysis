@@ -162,6 +162,7 @@ def create_intermediate_files(input_zip_path: str, intermediate_folder_path: str
             print(e)
 
 def get_intermediate_files(intermediate_folder_path: str) -> List[pd.DataFrame]:
+    print(f"Merging intermediate files from {intermediate_folder_path}...")
     dfs = []
     feather_files = [file for file in os.listdir(intermediate_folder_path) if file.endswith('.feather')]
     for feather_file in feather_files:
@@ -172,10 +173,11 @@ def get_intermediate_files(intermediate_folder_path: str) -> List[pd.DataFrame]:
         df.index = df["timestamp"]
         df.drop(columns=["timestamp"], inplace=True)
         dfs.append(df)
-        dataframe_utils.print_combined_size_dataframes(dfs)
+    dataframe_utils.print_combined_size_dataframes(dfs)
     return dfs
 
 def split_full_dataframe_by_instances(df, save_folder_path):
+    print(f"Splitting full dataframe by instance (e.g., by worker node) {save_folder_path}...")
     df.index = df["timestamp"]
     df.drop(columns=["timestamp"], inplace=True)
 
@@ -223,7 +225,7 @@ def split_full_dataframe_by_instances(df, save_folder_path):
 def process_zip(input_path: str, zip_relative_path: str, output_path: str, process_intermediate_only: bool) -> None:
 
     # Construct paths
-    print(f"Processing {zip_relative_path}")
+    print(f"\nProcessing {zip_relative_path}")
     zip_name = zip_relative_path.replace(".zip", "")  # Remove file-extension for now
     zip_file_path = f"{input_path}/{zip_relative_path}"
     full_output_path = f"{output_path}/{zip_name}".replace(" ", "")  # Strip whitespace
@@ -236,9 +238,8 @@ def process_zip(input_path: str, zip_relative_path: str, output_path: str, proce
         return
 
     # Process raw json files to separate dataframes
-    create_intermediate_files(zip_file_path, intermediate_folder_path)
-
     if process_intermediate_only:
+        create_intermediate_files(zip_file_path, intermediate_folder_path)
         return
 
     # Combine dataframes
