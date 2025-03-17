@@ -27,9 +27,9 @@ Results are minimized by removing all columns with static values.
 input_path = "../../data_warehouse/warehouse_6b/snapshots/"
 output_path = "../../data_warehouse/minimized_warehouse_6bbb/"
 namespace_filter = "workload"  # Ignore all namespaces that do not have this string in it
-run_in_parallel = False  # parallel execution might cause running out of memory
+run_in_parallel = True  # parallel execution might cause running out of memory
 print_columns = False
-max_parallel_workers = 10  #
+max_parallel_workers = 20  #
 
 zip_files_list = utils.list_zip_files(input_path)
 
@@ -130,11 +130,8 @@ def parse_metrics_from_json(data: bytes, path: str, values_container: dict) -> T
     return filtered_out, no_namespace
 
 
-def create_intermediate_files(input_zip_path: str, output_path2: str):
-    print(f"Processing {input_zip_path}")
-    zip_name = input_zip_path.replace(".zip", "")  # Remove file-extension for now
-    full_output_path = f"{output_path2}/{zip_name}".replace(" ", "")  # Strip whitespace
-    intermediate_folder_path = f"{full_output_path}/intermediate"
+def create_intermediate_files(input_zip_path: str, intermediate_folder_path: str):
+    print(f"\nProcessing {input_zip_path}")
     os.makedirs(intermediate_folder_path, exist_ok=True)
 
     # Process one slice at a time
@@ -142,7 +139,7 @@ def create_intermediate_files(input_zip_path: str, output_path2: str):
     for i, slice in enumerate(slices):
         output_path = intermediate_folder_path + f"/{i}.feather"
         if os.path.exists(output_path):
-            print(f"Skipping intermediate {output_path} because it already exists")
+            print(f"Skipping intermediate {i} because it already exists {output_path}")
             continue
 
         # Process slice
@@ -223,21 +220,23 @@ def split_full_dataframe_by_instances(df, save_folder_path):
         dataframe_utils.to_feather_sync(df_minimized, path + f"/{instance}.feather")
 
 
-def process_zip(input_path: str, zip_relative_path: str, output_path2: str, process_intermediate_only: bool) -> None:
+def process_zip(input_path: str, zip_relative_path: str, output_path: str, process_intermediate_only: bool) -> None:
 
     # Construct paths
     print(f"Processing {zip_relative_path}")
     zip_name = zip_relative_path.replace(".zip", "")  # Remove file-extension for now
-    zip_file = f"{input_path}/{zip_relative_path}"
-    full_output_path = f"{output_path2}/{zip_name}".replace(" ", "")  # Strip whitespace
+    zip_file_path = f"{input_path}/{zip_relative_path}"
+    full_output_path = f"{output_path}/{zip_name}".replace(" ", "")  # Strip whitespace
     intermediate_folder_path = f"{full_output_path}/intermediate"
+
+    # Check if we have already processed this zip
     full_intermediate_df_path = f"{intermediate_folder_path}/full.feather"  # Combined df from all intermediate files
     if os.path.exists(full_intermediate_df_path):
         print(f"Skipping previously processed zip {input_path} as full df already exists: {full_intermediate_df_path}")
         return
 
     # Process raw json files to separate dataframes
-    create_intermediate_files(zip_file, output_path2)
+    create_intermediate_files(zip_file_path, intermediate_folder_path)
 
     if process_intermediate_only:
         return
