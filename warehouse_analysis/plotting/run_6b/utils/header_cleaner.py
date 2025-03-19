@@ -91,7 +91,7 @@ def prettify_header(header: dict, keys: List[str]):
 
 
 
-def clean_up_headers(df: pd.DataFrame) -> pd.DataFrame:
+def clean_up_headers(df: pd.DataFrame, verbose=False) -> pd.DataFrame:
     """
     Transforms dataframe headers into human-readable form.
 
@@ -143,22 +143,24 @@ def clean_up_headers(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def clean_df(dataframe):
+def clean_df(dataframe, verbose=False):
     #Count number of rows and cols in the original df
-    print(f"Loaded {len(dataframe)} rows and {len(dataframe.columns)} columns")
+
     # Count the number of unique values in each column
     unique_counts = dataframe.nunique()
     # Find all static columns (columns with only one or two unique values)
     static_columns = unique_counts[unique_counts <= 2].index
     # Remove the static columns from the dataframe
     dataframe = dataframe.drop(static_columns, axis=1)
-    print(f"Removing {len(static_columns)} static columns ({len(dataframe.columns)} remaining)")
-    if len(dataframe.columns) < 100:
-        # Only display if the df is small enough to not stall the IDE (thousands of columns really slows things down)
-        dataframe.head()
+    if verbose:
+        print(f"Loaded {len(dataframe)} rows and {len(dataframe.columns)} columns")
+        print(f"Removing {len(static_columns)} static columns ({len(dataframe.columns)} remaining)")
+        if len(dataframe.columns) < 5:
+            # Only display if the df is small enough to not stall the IDE (thousands of columns really slows things down)
+            dataframe.head()
 
     # changing the dataframe headers to a more human-readable format
-    return clean_up_headers(dataframe)
+    return clean_up_headers(dataframe, verbose)
     #%%
 
 if __name__ == "__main__":
