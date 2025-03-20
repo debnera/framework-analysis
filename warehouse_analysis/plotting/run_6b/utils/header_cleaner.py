@@ -118,6 +118,8 @@ def clean_up_headers(df: pd.DataFrame, verbose=False) -> pd.DataFrame:
     df = df.copy()
     grouped_by_name = {}
     for col in list(df.columns):
+        if col == "timestamp":
+            continue  # Timestamp column should be the only non-json column
         try:
             header_dict = json.loads(col)
         except:
