@@ -1,6 +1,8 @@
 #%%
+import multiprocessing
 import os
 import os.path
+from functools import partial
 
 import ujson as json
 from typing import List, Tuple, Dict
@@ -132,36 +134,66 @@ def parse_metrics_from_json(data: bytes, path: str, values_container: dict) -> T
     return filtered_out, no_namespace
 
 
-def create_intermediate_files(input_zip_path: str, intermediate_folder_path: str):
-    print(f"\nProcessing {input_zip_path}")
-    os.makedirs(intermediate_folder_path, exist_ok=True)
+def process_single_intermediate_slice(input_zip_path: str, intermediate_folder_path: str, slice_info: tuple
+                                      ):
+    """
+    Process a single slice and save to intermediate file
 
-    # Process one slice at a time
-    slices = slice_utils.get_slices_by_folder(input_zip_path)
-    for i, slice in enumerate(slices):
-        output_path = intermediate_folder_path + f"/{i}.feather"
-        if os.path.exists(output_path):
-            print(f"Skipping intermediate {i} because it already exists {output_path}")
-            continue
+    Args:
+        input_zip_path (str): Path to the input zip file
+        intermediate_folder_path (str): Path to save intermediate files
+        i (int): Slice index
+    """
+    i, slice = slice_info
+    output_path = os.path.join(intermediate_folder_path, f"{i}.feather")
 
+    # Check if file already exists
+    if os.path.exists(output_path):
+        print(f"Skipping intermediate {i} because it already exists {output_path}")
+        return
+
+    try:
         # Process slice
         values_container = parse_slice_to_dict(input_zip_path, slice, debug_prints=False)
         values = metrics_dict_to_dataframe(values_container)
 
-        # Do some (destructive?) preprocessing
-        values.reset_index(drop=False, inplace=True, names=["timestamp"])  # Reset to default index (in case of old pandas/pyarrow version)
+        # Preprocessing
+        values.reset_index(drop=False, inplace=True, names=["timestamp"])
         unique_counts = values.nunique()
-        static_columns = unique_counts[unique_counts <= 2].index  # TODO: Could be dangerous to remove all static columns?
+        static_columns = unique_counts[unique_counts <= 2].index
         values.drop(static_columns, axis=1, inplace=True)
 
         # Save to disk
-        if len(values) == 0:
-            # Cannot save empty dataframes - nothing to do here
-            continue
-        try:
+        if len(values) > 0:
             dataframe_utils.to_feather_sync(values, output_path)
-        except Exception as e:
-            print(e)
+    except Exception as e:
+        print(f"Error processing slice {i}: {e}")
+
+
+def create_intermediate_files(input_zip_path: str, intermediate_folder_path: str):
+    """
+    Parallelize creation of intermediate files
+
+    Args:
+        input_zip_path (str): Path to the input zip file
+        intermediate_folder_path (str): Path to save intermediate files
+    """
+    print(f"\nProcessing {input_zip_path}")
+    os.makedirs(intermediate_folder_path, exist_ok=True)
+
+    # Get slices
+    slices = slice_utils.get_slices_by_folder(input_zip_path)
+
+    # Determine number of workers
+    max_workers = max_parallel_workers if run_in_parallel else 1
+
+    # Prepare partial function with fixed arguments
+    process_slice_func = partial(process_single_intermediate_slice, input_zip_path, intermediate_folder_path)
+
+    # Use Pool for parallel processing
+    with multiprocessing.Pool(processes=max_workers) as pool:
+        pool.map(process_slice_func, enumerate(slices))
+
 
 def get_intermediate_files(intermediate_folder_path: str) -> List[pd.DataFrame]:
     print(f"Merging intermediate files from {intermediate_folder_path}...")
@@ -274,25 +306,13 @@ def main() -> None:
 
 
     """ First process all intermediate files one-by-one to save memory (otherwise multithreading might fill up memory) """
-    if run_in_parallel:
-        with ProcessPoolExecutor(max_parallel_workers) as executor:
-            futures = [executor.submit(process_zip, input_path, zip_name_full, output_path, True) for zip_name_full in zips]
-            for future in futures:
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"Exception raised in parallel processing: {e}")
-                    import traceback
-                    traceback.print_exc()
-    else:
-        for zip_name_full in zips:
-            try:
-                process_zip(input_path, zip_name_full, output_path, process_intermediate_only=True)
-            except Exception as e:
-                print(f"Exception raised in sequential processing: {e}")
-                import traceback
-                traceback.print_exc()
-                
+    for zip_name_full in zips:
+        try:
+            process_zip(input_path, zip_name_full, output_path, process_intermediate_only=True)
+        except Exception as e:
+            print(f"Exception raised in sequential processing: {e}")
+            import traceback
+            traceback.print_exc()
 
     """ Then read all intermediate files to memory and combine them into one big dataframe per zip file """
     for zip_name_full in zips:
