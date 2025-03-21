@@ -24,9 +24,10 @@ Results are minimized by removing all columns with static values.
 """
 
 # This script will process all zips located at the input_path
-input_path = "../../data_warehouse/warehouse_6b/snapshots/"
-output_path = "../../data_warehouse/minimized_warehouse_6bbb/"
+input_path = "../../data_warehouse/warehouse_5b/snapshots/"
+output_path = "../../data_warehouse/minimized_warehouse_5b/"
 namespace_filter = "workload"  # Ignore all namespaces that do not have this string in it
+use_column_filtering = False
 run_in_parallel = True  # parallel execution might cause running out of memory
 print_columns = False
 max_parallel_workers = 20  #
@@ -107,12 +108,13 @@ def parse_metrics_from_json(data: bytes, path: str, values_container: dict) -> T
         for item in json_data['data']['result']:
             header = json.dumps(item['metric']) # Use a tuple of the metric dictionary's items
             # Filter out if possible:
-            if "namespace" in item["metric"]:
-                if namespace_filter not in item["metric"]["namespace"]:
-                    filtered_out += 1
-                    continue
-            else:
-                no_namespace += 1
+            if use_column_filtering:
+                if "namespace" in item["metric"]:
+                    if namespace_filter not in item["metric"]["namespace"]:
+                        filtered_out += 1
+                        continue
+                else:
+                    no_namespace += 1
 
             values = dict(item['values'])
 
