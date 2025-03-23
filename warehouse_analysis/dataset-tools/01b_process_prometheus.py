@@ -2,6 +2,7 @@
 import multiprocessing
 import os
 import os.path
+import sys
 from functools import partial
 
 import ujson as json
@@ -26,13 +27,14 @@ Results are minimized by removing all columns with static values.
 """
 
 # This script will process all zips located at the input_path
-input_path = "../../data_warehouse/warehouse_5b/snapshots/"
-output_path = "../../data_warehouse/minimized_warehouse_5b/"
+input_path = "../../data_warehouse/warehouse_6b/snapshots/"
+output_path = "../../data_warehouse/minimized_warehouse_6b/"
 namespace_filter = "workload"  # Ignore all namespaces that do not have this string in it
 use_column_filtering = False
 run_in_parallel = True  # parallel execution might cause running out of memory
 print_columns = False
 max_parallel_workers = 20  #
+intermediate_dict_key_limit = 500  # Skip large JSON files - Parsing some files consumes extreme amounts of RAM (64+ GB) due to inefficient processing
 
 zip_files_list = utils.list_zip_files(input_path)
 
@@ -59,10 +61,15 @@ def parse_slice_to_dict(zip_file: str, slice: List[str], debug_prints=False) -> 
         filtered_out = 0
         no_namespace = 0
         for path in slice:
-            print(f" {index}", end="")
+            # print(f" {index}", end="")
             index += 1
             with zip_ref.open(path) as json_file:
                 a, b = parse_metrics_from_json(json_file, path, values_container)
+                # Check dictionary size (2GB = 2 * 1024 * 1024 * 1024 bytes)
+                if sys.getsizeof(values_container) > 2 * 1024 * 1024 * 1024:
+                    raise MemoryError(f"Dictionary size exceeds 2GB limit for slice {slice}")
+                if len(values_container.keys()) > intermediate_dict_key_limit:
+                    raise MemoryError(f"Dictionary size exceeds {intermediate_dict_key_limit} keys limit for slice {slice}")
                 filtered_out += a
                 no_namespace += b
         if debug_prints:
@@ -142,7 +149,7 @@ def process_single_intermediate_slice(input_zip_path: str, intermediate_folder_p
     Args:
         input_zip_path (str): Path to the input zip file
         intermediate_folder_path (str): Path to save intermediate files
-        i (int): Slice index
+        slice_info: (index, list of paths)
     """
     i, slice = slice_info
     output_path = os.path.join(intermediate_folder_path, f"{i}.feather")
