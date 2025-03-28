@@ -25,10 +25,13 @@ NOTE: If using DataSpell, or similar IDE, you may need to increase the maximum a
 Results are minimized by removing all columns with static values.
 - This means that some dataframes might have different columns than other dataframes.
 """
+if __name__ == "__main__":
+    multiprocessing.set_start_method('spawn')  # Use 'spawn' on all platforms for consistency
+
 
 # This script will process all zips located at the input_path
-input_path = "../../data_warehouse/warehouse_6b/snapshots/"
-output_path = "../../data_warehouse/minimized_warehouse_6b/"
+input_path = "../../data_warehouse/warehouse_7c/snapshots/"
+output_path = "../../data_warehouse/minimized_warehouse_7c/"
 namespace_filter = "workload"  # Ignore all namespaces that do not have this string in it
 use_column_filtering = False
 run_in_parallel = True  # parallel execution might cause running out of memory
